@@ -6,7 +6,7 @@ Rust submission for rinha-de-backend-2026 — fraud detection via vector search.
 
 The scoring formula rewards p99 ≤ 1ms with maximum latency points. Go's GC introduces non-deterministic tail latency that is tunable but not eliminable. Rust has zero GC — latency is fully deterministic. On a slow test machine (Mac Mini 2014, 2.6 GHz), this difference is real under load.
 
-See `docs/rust-vs-go.md` for the full trade-off analysis.
+See `docs/rust-vs-go.md` for the full trade-off analysis. Build and validate correctness with the Go submission first, then use Rust to push p99 lower.
 
 ## Challenge summary
 
@@ -20,17 +20,16 @@ Full spec: `rinha-de-backend-2026/docs/en/`
 
 ## API contract
 
-- `GET /ready` — return 200 when HNSW index is built and ready, 503 otherwise
+- `GET /ready` — return 503 until HNSW index is built, then 200
 - `POST /fraud-score` — receive transaction, return `{ "approved": bool, "fraud_score": float }`
-- Port: 9999 (nginx listens here, forwards to api1/api2)
+- Internal port: 8080 (nginx on 9999 forwards here)
 
 ## Architecture
 
 ```
-nginx (0.05 CPU / 15MB)
-  └── round-robin
-        ├── api1 (0.475 CPU / 167MB)
-        └── api2 (0.475 CPU / 167MB)
+nginx (0.05 CPU / 15MB)  ← listens on :9999, round-robin
+  ├── api1 (0.475 CPU / 167MB)  ← listens on :8080
+  └── api2 (0.475 CPU / 167MB)  ← listens on :8080
 ```
 
 ## Design decisions (shared with Go submission)
@@ -38,25 +37,33 @@ nginx (0.05 CPU / 15MB)
 | Decision | Choice | Reason |
 |---|---|---|
 | Vector type | f32 | Halves memory vs f64, cache-friendly, SIMD-aligned |
-| Vector index | HNSW in-memory | O(log N) queries, fits in 167MB easily |
+| Vector index | HNSW in-memory, built at startup | O(log N) queries; dataset is static |
+| HNSW params | Defaults first | 14 dims = high natural recall; tune after preview tests |
 | Resource files | Embedded in image via `COPY` | Self-contained, no volume mount dependencies |
-| Index build | At container startup | Spec explicitly supports this |
-| Docker | Multi-stage, `FROM scratch` | Tiny final image, statically linked binary |
-| nginx | `worker_processes 1`, `keepalive 100`, `access_log off` | Matches CPU quota |
+| Docker | Multi-stage → `FROM scratch` | Tiny final image, statically linked binary |
+| nginx | TBD — template to be provided | `worker_processes 1`, `keepalive 100`, `access_log off` as baseline |
 
 ## Rust-specific decisions (TBD)
 
-These need to be resolved during implementation:
+Resolve during implementation, informed by Go submission learnings:
 
 - **HTTP framework**: `axum` (tokio-based, ergonomic) vs `actix-web` (high perf) vs `hyper` (bare metal)
 - **HNSW library**: `instant-distance` vs `hora` vs hand-rolled
-- **Async runtime**: `tokio` (standard) — thread count should respect the 0.475 CPU quota
+- **Async runtime**: `tokio` — worker threads should be pinned to 1 to respect the 0.475 CPU quota
 - **JSON**: `serde_json` (standard) vs `simd-json` (faster parsing)
 - **Cross-compilation**: `cross` crate or Docker builder for linux/amd64 from ARM Mac
 
+## Vectorization notes
+
+Same rules as Go submission:
+- `minutes_since_last_tx`: delta between `requested_at` and `last_transaction.timestamp` in minutes, clamped. -1 sentinel only when `last_transaction` is null.
+- `unknown_merchant`: 1 if `merchant.id` not in `customer.known_merchants`, else 0.
+- `mcc_risk`: look up `merchant.mcc`, default 0.5 if not found.
+- All values clamped to [0.0, 1.0] except indices 5 and 6 (-1 sentinel).
+
 ## Resource files
 
-Copy these from `rinha-de-backend-2026/resources/` into `resources/` at the repo root:
+Copy from `rinha-de-backend-2026/resources/` into `resources/`:
 
 - `references.json.gz` — 100K labeled vectors (fraud/legit), ~1.6MB gzipped
 - `mcc_risk.json` — MCC code → risk score mapping
@@ -72,8 +79,8 @@ Docker images must be public and compatible with `linux/amd64`.
 
 ## Scoring
 
-- `score_p99`: logarithmic, +1000 per 10x improvement in p99. Ceiling at ≤1ms (+3000), floor at >2000ms (-3000).
-- `score_det`: based on FP (weight 1), FN (weight 3), HTTP errors (weight 5). Cutoff at >15% failure rate → -3000.
+- `score_p99`: logarithmic, +1000 per 10x improvement. Ceiling at ≤1ms (+3000), floor at >2000ms (-3000).
+- `score_det`: FP weight 1, FN weight 3, HTTP error weight 5. Cutoff at >15% failure rate → -3000.
 - `final_score = score_p99 + score_det`, range [-6000, +6000].
 
-Key insight: HTTP 500s are the worst outcome (weight 5 + count toward failure rate). If something goes wrong, return `approved: true, fraud_score: 0.0` rather than 500.
+HTTP 500s are the worst outcome — weight 5 and count toward the failure rate cutoff.
