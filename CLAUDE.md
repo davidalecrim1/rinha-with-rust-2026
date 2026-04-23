@@ -43,15 +43,42 @@ nginx (0.05 CPU / 15MB)  ← listens on :9999, round-robin
 | Docker | Multi-stage → `FROM scratch` | Tiny final image, statically linked binary |
 | nginx | TBD — template to be provided | `worker_processes 1`, `keepalive 100`, `access_log off` as baseline |
 
-## Rust-specific decisions (TBD)
+## Rust-specific decisions
 
-Resolve during implementation, informed by Go submission learnings:
+| Decision | Choice | Reason |
+|---|---|---|
+| HTTP framework | `axum` | tokio-native, clean serde integration, tower overhead negligible at this scale |
+| HNSW library | `instant-distance` | Actively maintained, pure Rust, no C deps, clean `FROM scratch` build |
+| Async runtime | `tokio`, `worker_threads = 1` | Matches 0.475 CPU quota; eliminates thread contention, same reasoning as Go's `GOMAXPROCS=1` |
+| JSON | `serde_json` | Payload is ~200 bytes — simd-json gains (~1-2µs) don't justify axum extractor incompatibility |
+| Cross-compilation | Docker multi-stage builder | Build inside `FROM rust:alpine`; no host toolchain needed, matches competition infra |
 
-- **HTTP framework**: `axum` (tokio-based, ergonomic) vs `actix-web` (high perf) vs `hyper` (bare metal)
-- **HNSW library**: `instant-distance` vs `hora` vs hand-rolled
-- **Async runtime**: `tokio` — worker threads should be pinned to 1 to respect the 0.475 CPU quota
-- **JSON**: `serde_json` (standard) vs `simd-json` (faster parsing)
-- **Cross-compilation**: `cross` crate or Docker builder for linux/amd64 from ARM Mac
+## Module contract
+
+Business logic must not leak into handlers. Each module has a single responsibility:
+
+- **`main.rs`**: wires modules, builds the HNSW index at startup, sets the readiness flag
+- **`handler.rs`**: deserialize → call `vectorizer::vectorize()` → call `index::search()` → serialize. No scoring logic.
+- **`vectorizer.rs`**: transaction payload → `[f32; 14]`. Pure data transformation.
+- **`index.rs`**: owns the `instant-distance` instance. Exposes only `fn search(vector: [f32; 14]) -> f32` returning `fraud_score`. The `approved` decision (`score < 0.6`) lives here. Swap the ANN library by touching only this file.
+
+## Project structure
+
+```
+rinha-with-rust-2026/
+├── src/
+│   ├── main.rs          # startup, runtime config, readiness flag
+│   ├── handler.rs       # axum handlers for /ready and /fraud-score
+│   ├── vectorizer.rs    # 14-dim normalization
+│   └── index.rs         # instant-distance wrapper, exposes search(vector) -> f32
+├── resources/
+│   ├── references.json.gz
+│   ├── mcc_risk.json
+│   └── normalization.json
+├── Dockerfile
+├── Cargo.toml
+└── CLAUDE.md
+```
 
 ## Vectorization notes
 
