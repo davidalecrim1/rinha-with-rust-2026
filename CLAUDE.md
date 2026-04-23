@@ -37,8 +37,7 @@ nginx (0.05 CPU / 15MB)  ← listens on :9999, round-robin
 | Decision | Choice | Reason |
 |---|---|---|
 | Vector type | f32 | Halves memory vs f64, cache-friendly, SIMD-aligned |
-| Vector index | HNSW in-memory, built at startup | O(log N) queries; dataset is static |
-| HNSW params | Defaults first | 14 dims = high natural recall; tune after preview tests |
+| Vector search | Brute-force KNN + SIMD auto-vectorization | 100K × 14 f32 = ~1.4M ops; AVX2 brings this to ~50-70µs, well under 1ms p99 — no ANN approximation error |
 | Resource files | Embedded in image via `COPY` | Self-contained, no volume mount dependencies |
 | Docker | Multi-stage → `FROM scratch` | Tiny final image, statically linked binary |
 | nginx | TBD — template to be provided | `worker_processes 1`, `keepalive 100`, `access_log off` as baseline |
@@ -48,7 +47,8 @@ nginx (0.05 CPU / 15MB)  ← listens on :9999, round-robin
 | Decision | Choice | Reason |
 |---|---|---|
 | HTTP framework | `axum` | tokio-native, clean serde integration, tower overhead negligible at this scale |
-| HNSW library | `instant-distance` | Actively maintained, pure Rust, no C deps, clean `FROM scratch` build |
+| KNN search | Brute-force over `Vec<f32>` flat buffer, AVX2 via `RUSTFLAGS=-C target-feature=+avx2` | Compiler auto-vectorizes inner loop; no external crate, no C deps, deterministic recall |
+| Top-5 selection | Max-heap of size 5, O(N log 5) ≈ O(N) | Avoids full sort; single pass over distances |
 | Async runtime | `tokio`, `worker_threads = 1` | Matches 0.475 CPU quota; eliminates thread contention, same reasoning as Go's `GOMAXPROCS=1` |
 | JSON | `serde_json` | Payload is ~200 bytes — simd-json gains (~1-2µs) don't justify axum extractor incompatibility |
 | Cross-compilation | Docker multi-stage builder | Build inside `FROM rust:alpine`; no host toolchain needed, matches competition infra |
@@ -60,7 +60,7 @@ Business logic must not leak into handlers. Each module has a single responsibil
 - **`main.rs`**: wires modules, builds the HNSW index at startup, sets the readiness flag
 - **`handler.rs`**: deserialize → call `vectorizer::vectorize()` → call `index::search()` → serialize. No scoring logic.
 - **`vectorizer.rs`**: transaction payload → `[f32; 14]`. Pure data transformation.
-- **`index.rs`**: owns the `instant-distance` instance. Exposes only `fn search(vector: [f32; 14]) -> f32` returning `fraud_score`. The `approved` decision (`score < 0.6`) lives here. Swap the ANN library by touching only this file.
+- **`index.rs`**: owns the flat `Vec<f32>` reference buffer and label list. Exposes only `fn search(vector: [f32; 14]) -> f32` returning `fraud_score`. The `approved` decision (`score < 0.6`) lives here. Swap the search strategy by touching only this file.
 
 ## Project structure
 
