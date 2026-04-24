@@ -48,7 +48,7 @@ nginx (0.05 CPU / 15MB)  ← listens on :9999, round-robin
 |---|---|---|
 | HTTP framework | `axum` | tokio-native, clean serde integration, tower overhead negligible at this scale |
 | KNN search | Brute-force over `Vec<f32>` flat buffer, AVX2 via `RUSTFLAGS=-C target-feature=+avx2` | Compiler auto-vectorizes inner loop; no external crate, no C deps, deterministic recall |
-| Top-5 selection | Max-heap of size 5, O(N log 5) ≈ O(N) | Avoids full sort; single pass over distances |
+| Top-5 selection | Fixed array of 5 slots, linear eviction scan, O(N) | Avoids full sort; single pass over distances |
 | Async runtime | `tokio`, `worker_threads = 1` | Matches 0.475 CPU quota; eliminates thread contention, same reasoning as Go's `GOMAXPROCS=1` |
 | JSON | `serde_json` | Payload is ~200 bytes — simd-json gains (~1-2µs) don't justify axum extractor incompatibility |
 | Cross-compilation | Docker multi-stage builder | Build inside `FROM rust:alpine`; no host toolchain needed, matches competition infra |
