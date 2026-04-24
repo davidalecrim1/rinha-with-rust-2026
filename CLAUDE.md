@@ -111,3 +111,11 @@ Docker images must be public and compatible with `linux/amd64`.
 - `final_score = score_p99 + score_det`, range [-6000, +6000].
 
 HTTP 500s are the worst outcome — weight 5 and count toward the failure rate cutoff.
+
+## Rust practices
+
+**Panics**: `.expect()` / `.unwrap()` are acceptable only at startup on embedded data (e.g., `include_bytes!` resources parsed in `main`). Any code reachable from a live request must not panic — return an error type instead. A panic on a malformed request means connection reset for the client and a weight-5 penalty in scoring.
+
+**Parse at the boundary**: validate and parse external input in the serde types, not in business logic. Use `DateTime<FixedOffset>` rather than `String` for timestamps so that invalid dates are rejected at deserialization with a clean 422, before reaching `vectorize`.
+
+**Safe startup panics must have `.expect("message")`** — never bare `.unwrap()` on embedded resource parsing, so crash messages are actionable.
