@@ -8,7 +8,7 @@ use std::sync::{
     Arc,
 };
 
-use crate::index::FraudIndex;
+use crate::index::{quantize, FraudIndex};
 use crate::types::{FraudRequest, FraudResponse, NormConsts};
 use crate::vectorizer::vectorize;
 
@@ -35,9 +35,10 @@ pub async fn fraud_score(
     Json(req): Json<FraudRequest>,
 ) -> Json<FraudResponse> {
     let vector = vectorize(&req, &s.norm, &s.mcc_risk);
+    let query = quantize(&vector);
     // Offload the CPU-bound KNN scan so the tokio thread stays free for I/O.
     // On panic, default to fraud (score=1.0, approved=false) — avoids HTTP 500 weight-5 penalty.
-    let fraud_score = tokio::task::spawn_blocking(move || s.index.search(&vector))
+    let fraud_score = tokio::task::spawn_blocking(move || s.index.search(&query))
         .await
         .unwrap_or(1.0);
     Json(FraudResponse {

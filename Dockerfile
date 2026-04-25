@@ -1,7 +1,7 @@
 FROM rust:alpine AS builder
 RUN apk add --no-cache musl-dev
 WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src       ./src
 COPY resources ./resources
 # Enable AVX2 and FMA CPU instructions so LLVM auto-vectorizes the brute-force

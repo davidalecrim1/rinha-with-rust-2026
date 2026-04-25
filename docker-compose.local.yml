@@ -20,6 +20,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.local
+      platforms:
+        - linux/amd64
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ready || exit 1"]
       interval: 2s
@@ -35,6 +37,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.local
+      platforms:
+        - linux/amd64
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ready || exit 1"]
       interval: 2s
