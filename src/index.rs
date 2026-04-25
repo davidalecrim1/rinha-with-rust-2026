@@ -31,25 +31,29 @@ impl FraudIndex {
     }
 
     pub fn search(&self, q: &[i16; STRIDE]) -> f32 {
-        let mut neighbors: [(i32, usize); 5] = [(i32::MAX, 0); 5];
-        let (mut worst_slot, mut worst_dist) = (0, i32::MAX);
-
-        for (idx, row) in self.refs.iter().enumerate() {
-            let dist = dist_sq(q, row);
-            if dist < worst_dist {
-                neighbors[worst_slot] = (dist, idx);
-                let (ws, wd) = find_worst_neighbor(&neighbors);
-                worst_slot = ws;
-                worst_dist = wd;
-            }
-        }
-
-        let fraud_count = neighbors
-            .iter()
-            .filter(|(_, idx)| self.labels[*idx] == 1)
-            .count();
-        fraud_count as f32 / 5.0
+        knn_search(&self.refs, &self.labels, q)
     }
+}
+
+fn knn_search(refs: &[[i16; STRIDE]], labels: &[u8], q: &[i16; STRIDE]) -> f32 {
+    let mut neighbors: [(i32, usize); 5] = [(i32::MAX, 0); 5];
+    let (mut worst_slot, mut worst_dist) = (0, i32::MAX);
+
+    for (idx, row) in refs.iter().enumerate() {
+        let dist = dist_sq(q, row);
+        if dist < worst_dist {
+            neighbors[worst_slot] = (dist, idx);
+            let (ws, wd) = find_worst_neighbor(&neighbors);
+            worst_slot = ws;
+            worst_dist = wd;
+        }
+    }
+
+    let fraud_count = neighbors
+        .iter()
+        .filter(|(_, idx)| labels[*idx] == 1)
+        .count();
+    fraud_count as f32 / 5.0
 }
 
 fn find_worst_neighbor(neighbors: &[(i32, usize); 5]) -> (usize, i32) {
@@ -153,13 +157,72 @@ mod tests {
         assert_eq!(dist_sq(&a, &b), 25);
     }
 
+    fn make_refs(entries: &[([f32; 14], u8)]) -> (Vec<[i16; STRIDE]>, Vec<u8>) {
+        let refs = entries.iter().map(|(v, _)| quantize(v)).collect();
+        let labels = entries.iter().map(|(_, l)| *l).collect();
+        (refs, labels)
+    }
+
+    const ZERO: [f32; 14] = [0.0; 14];
+
+    #[test]
+    fn search_all_fraud() {
+        let (refs, labels) = make_refs(&[
+            (ZERO, 1),
+            (ZERO, 1),
+            (ZERO, 1),
+            (ZERO, 1),
+            (ZERO, 1),
+        ]);
+        assert_eq!(knn_search(&refs, &labels, &quantize(&ZERO)), 1.0);
+    }
+
+    #[test]
+    fn search_all_legit() {
+        let (refs, labels) = make_refs(&[
+            (ZERO, 0),
+            (ZERO, 0),
+            (ZERO, 0),
+            (ZERO, 0),
+            (ZERO, 0),
+        ]);
+        assert_eq!(knn_search(&refs, &labels, &quantize(&ZERO)), 0.0);
+    }
+
+    #[test]
+    fn search_mixed_3_fraud_2_legit() {
+        let (refs, labels) = make_refs(&[
+            (ZERO, 1),
+            (ZERO, 1),
+            (ZERO, 1),
+            (ZERO, 0),
+            (ZERO, 0),
+        ]);
+        assert_eq!(knn_search(&refs, &labels, &quantize(&ZERO)), 0.6);
+    }
+
+    #[test]
+    fn search_nearest_neighbors_win() {
+        // 5 fraud vectors close to origin; 1 legit far away — top-5 must be all fraud
+        let close_fraud = [0.01f32; 14];
+        let far_legit = [0.9f32; 14];
+        let (refs, labels) = make_refs(&[
+            (close_fraud, 1),
+            (close_fraud, 1),
+            (close_fraud, 1),
+            (close_fraud, 1),
+            (close_fraud, 1),
+            (far_legit, 0),
+        ]);
+        assert_eq!(knn_search(&refs, &labels, &quantize(&ZERO)), 1.0);
+    }
+
     #[test]
     fn search_returns_valid_score() {
         let index = FraudIndex::new();
         let q = quantize(&[0.5f32; 14]);
         let score = index.search(&q);
         assert!(score >= 0.0 && score <= 1.0);
-        // Score must be one of 0.0, 0.2, 0.4, 0.6, 0.8, 1.0
         let valid = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
         assert!(valid.iter().any(|&v| (score - v).abs() < 1e-6));
     }
