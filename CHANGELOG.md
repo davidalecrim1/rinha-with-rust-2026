@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.0
+- Quantize 100K reference vectors from f32 to i16 (scale 8192) at compile time via `build.rs`, shrinking the scan buffer from 5.6 MB to 3.2 MB
+- Replace runtime JSON decompression with binary blob loading — zero parse cost at startup
+- p99 improved from 109ms → 79ms locally on linux/amd64 with 0% error rate
+
 ## v0.1.2
 - Add k6 load test script, replace shell-based example-payloads with Python
 - Include VUs and duration in load test result filenames
