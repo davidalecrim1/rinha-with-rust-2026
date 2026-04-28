@@ -1,6 +1,6 @@
 DOCKER_IMAGE := davidalecrim1/rinha-rust-2026
 
-.PHONY: lint run test release load-test profile
+.PHONY: lint run test release load-test profile fetch-test-data
 
 lint:
 	cargo fmt --check
@@ -11,6 +11,9 @@ test:
 
 run:
 	docker compose -f docker-compose.local.yml up --build -d
+
+fetch-test-data:
+	cp ../rinha-de-backend-2026/test/test-data.json scripts/test-data.json
 
 load-test: run
 	@echo "Waiting for stack to be ready..."
@@ -41,7 +44,7 @@ profile:
 # (docker-compose.yml, nginx.conf, info.json) with the new image tag.
 release:
 	$(eval LAST_TAG := $(shell git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1))
-	$(eval VERSION := $(if $(LAST_TAG),$(shell echo $(LAST_TAG) | awk -F. '{print $$1"."$$2"."$$3+1}'),v0.1.0))
+	$(eval VERSION := $(or $(VERSION),$(if $(LAST_TAG),$(shell echo $(LAST_TAG) | awk -F. '{print $$1"."$$2"."$$3+1}'),v0.1.0)))
 	@echo "Releasing $(VERSION)"
 	git tag $(VERSION)
 	git push origin $(VERSION)
