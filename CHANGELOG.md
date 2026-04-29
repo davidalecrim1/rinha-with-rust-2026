@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.2
+- Replace 16-byte bit-packed rows with 32-byte flat i16 rows covering all 14 dims
+- AVX2 kernel (`_mm256_madd_epi16`) replaces SSE2 + scalar lookup tables — single instruction covers all dims
+- Labels stored separately; eliminates bit-unpacking and PartialDists from the hot path
+
 ## v0.7.1
 - Port i16 fixed-point quantization (SCALE=8192) with 16-byte packed rows, replacing f32 brute-force
 - SSE2 SIMD distance kernel for 6 continuous dims; PartialDists lookup table for 5 discrete dims
