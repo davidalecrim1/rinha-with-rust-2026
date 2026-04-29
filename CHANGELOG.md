@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.1
+- Port i16 fixed-point quantization (SCALE=8192) with 16-byte packed rows, replacing f32 brute-force
+- SSE2 SIMD distance kernel for 6 continuous dims; PartialDists lookup table for 5 discrete dims
+- Insertion-sort top-5 with monotonically tightening bound; 6 pre-computed JSON responses eliminate serde_json on hot path
+
 ## v0.7.0
 - Updated to 3M reference dataset
 - Replace TCP with Unix domain sockets between nginx and api instances
