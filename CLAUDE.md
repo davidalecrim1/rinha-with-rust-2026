@@ -36,31 +36,33 @@ nginx (0.05 CPU / 15MB)  ← listens on :9999, round-robin
 
 | Decision | Choice | Reason |
 |---|---|---|
-| Vector type | f32 | Halves memory vs f64, cache-friendly, SIMD-aligned |
-| Vector search | Brute-force KNN + SIMD auto-vectorization | 100K × 14 f32 = ~1.4M ops; AVX2 brings this to ~50-70µs, well under 1ms p99 — no ANN approximation error |
-| Resource files | Embedded in image via `COPY` | Self-contained, no volume mount dependencies |
+| Vector type | i16 packed rows (16 bytes/row) | Halves bandwidth vs f32; 6 continuous dims in bytes 0–11, 5 discrete dims bit-packed in bytes 12–14 as dictionary indices, 3 binary dims as bits, label in byte 15. SCALE=8192 |
+| Vector search | Brute-force KNN + SSE2 i16 SIMD + insertion-sort top-5 | ~1M rows × 16 bytes = 16 MB; SSE2 `_mm_madd_epi16` computes 6-dim squared distance in ~10 cycles; insertion sort keeps bound tight, skipping rows early |
+| Resource files | Pre-packed binary embedded at compile time (build.rs) | No runtime decompression or JSON parsing — instant startup, smaller hot-path binary |
 | Docker | Multi-stage → `FROM scratch` | Tiny final image, statically linked binary |
-| nginx | TBD — template to be provided | `worker_processes 1`, `keepalive 100`, `access_log off` as baseline |
+| nginx | Unix domain sockets (`server unix:/var/run/apiN.sock`) | Bypasses TCP stack entirely; configured in nginx.conf + docker-compose volumes |
 
 ## Rust-specific decisions
 
 | Decision | Choice | Reason |
 |---|---|---|
 | HTTP framework | `axum` | tokio-native, clean serde integration, tower overhead negligible at this scale |
-| KNN search | Brute-force over `Vec<f32>` flat buffer, AVX2 via `RUSTFLAGS=-C target-feature=+avx2` | Compiler auto-vectorizes inner loop; no external crate, no C deps, deterministic recall |
-| Top-5 selection | Fixed array of 5 slots, linear eviction scan, O(N) | Avoids full sort; single pass over distances |
+| KNN search | Brute-force over `Vec<[u8; 16]>` packed rows, SSE2 via `-C target-cpu=haswell` | i16 SIMD inner loop; dictionary lookup for discrete dims eliminates per-row arithmetic; no external crate, deterministic recall |
+| Top-5 selection | Insertion-sort sorted array, bound = `neighbors[4].0`, tightens monotonically | Rows failing the bound check are skipped before computing fraud label; no rescan of 5 slots |
+| Response serialization | 6 pre-computed `Vec<u8>` responses built at startup | Only 6 outcomes (0–5 fraud neighbors); eliminates serde_json on every request |
 | Async runtime | `tokio`, `worker_threads = 1` | Matches 0.475 CPU quota; eliminates thread contention, same reasoning as Go's `GOMAXPROCS=1` |
-| JSON | `serde_json` | Payload is ~200 bytes — simd-json gains (~1-2µs) don't justify axum extractor incompatibility |
 | Cross-compilation | Docker multi-stage builder | Build inside `FROM rust:alpine`; no host toolchain needed, matches competition infra |
 
 ## Module contract
 
 Business logic must not leak into handlers. Each module has a single responsibility:
 
-- **`main.rs`**: wires modules, builds the HNSW index at startup, sets the readiness flag
-- **`handler.rs`**: deserialize → call `vectorizer::vectorize()` → call `index::search()` → serialize. No scoring logic.
+- **`main.rs`**: wires modules, loads embedded resources, builds pre-computed responses, sets the readiness flag
+- **`handler.rs`**: deserialize → call `vectorizer::vectorize()` → call `index::search()` → return pre-computed response bytes. No scoring logic.
 - **`vectorizer.rs`**: transaction payload → `[f32; 14]`. Pure data transformation.
-- **`index.rs`**: owns the flat `Vec<f32>` reference buffer and label list. Exposes only `fn search(vector: [f32; 14]) -> f32` returning `fraud_score`. The `approved` decision (`score < 0.6`) lives here. Swap the search strategy by touching only this file.
+- **`index.rs`**: owns the packed `Vec<[u8; 16]>` reference buffer. Exposes `fn search(vector: &[f32; 14]) -> u8` returning fraud neighbor count (0–5). Swap the search strategy by touching only this file.
+- **`packed_ref.rs`**: 16-byte row encoding — 6 continuous dims as i16 (bytes 0–11), 5 discrete dims as bit-packed dictionary indices (bytes 12–14), 3 binary dims as bits, 1 label byte. Pre-computed partial distances (`PartialDists`) eliminate per-row arithmetic for low-cardinality dims.
+- **`simd.rs`**: SSE2 distance kernel for the 6 continuous dims.
 
 ## Project structure
 
@@ -70,7 +72,10 @@ rinha-with-rust-2026/
 │   ├── main.rs          # startup, runtime config, readiness flag
 │   ├── handler.rs       # axum handlers for /ready and /fraud-score
 │   ├── vectorizer.rs    # 14-dim normalization
-│   └── index.rs         # instant-distance wrapper, exposes search(vector) -> f32
+│   ├── index.rs         # packed-row k-NN, exposes search(vector) -> u8
+│   ├── packed_ref.rs    # 16-byte row format, PartialDists, dicts (from build.rs)
+│   └── simd.rs          # SSE2 distance kernel
+├── build.rs             # packs references.json.gz → packed_refs.bin at compile time
 ├── resources/
 │   ├── references.json.gz
 │   ├── mcc_risk.json
