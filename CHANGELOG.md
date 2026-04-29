@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.0
+- Updated to 3M reference dataset
+- Replace TCP with Unix domain sockets between nginx and api instances
+- Increase nginx `worker_connections` to 1024 to avoid connection queuing under load
+
 ## v0.1.2
 - Add k6 load test script, replace shell-based example-payloads with Python
 - Include VUs and duration in load test result filenames

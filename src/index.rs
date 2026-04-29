@@ -62,7 +62,11 @@ fn find_worst_neighbor(neighbors: &[(f32, bool); 5]) -> (usize, f32) {
         .iter()
         .enumerate()
         .fold((0, f32::NEG_INFINITY), |(wi, wd), (i, &(d, _))| {
-            if d > wd { (i, d) } else { (wi, wd) }
+            if d > wd {
+                (i, d)
+            } else {
+                (wi, wd)
+            }
         })
 }
 
@@ -88,7 +92,11 @@ mod tests {
         let records: Vec<String> = entries
             .iter()
             .map(|(v, label)| {
-                let vec_str = v.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(",");
+                let vec_str = v
+                    .iter()
+                    .map(|f| f.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
                 format!("{{\"vector\":[{}],\"label\":\"{}\"}}", vec_str, label)
             })
             .collect();
